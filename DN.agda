@@ -23,6 +23,8 @@ data NNF : Set where
   _∧_ : NNF → NNF → NNF
   _∨_ : NNF → NNF → NNF
 
+
+-- 3. -- 
 mutual
     to-nnf : Formula → NNF
     to-nnf (Var f) = Lit (Var f)
