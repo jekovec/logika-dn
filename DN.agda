@@ -232,3 +232,121 @@ myMap2 = myMap [ 0 ]≔ false   -- overwrite key 0
 _ : myMap2 ‼ 0 ≡ just false
 _ = refl
 
+-- 5. --
+
+-- Some helpers
+not : Bool → Bool
+not true  = false
+not false = true
+
+_&&_ : Bool → Bool → Bool
+true  && b = b
+false && _ = false
+
+_||_ : Bool → Bool → Bool
+true  || _ = true
+false || b = b
+
+-- Evaluate a formula under an assignment.
+
+eval : Assignment → Formula → Maybe Bool
+eval a (Var x) = a ‼ x
+
+eval a (¬ f) with eval a f
+... | just b  = just (not b)
+... | nothing = nothing
+
+eval a (f ∧ g) with eval a f | eval a g
+... | just b₁ | just b₂ = just (b₁ && b₂)
+... | _       | _       = nothing
+
+eval a (f ∨ g) with eval a f | eval a g
+... | just b₁ | just b₂ = just (b₁ || b₂)
+... | _       | _       = nothing
+
+
+-- test
+_ : eval myMap (Var 0 ∧ Var 1) ≡ just false
+_ = refl
+
+-- 6. --
+
+-- Lieteral helper
+
+eval-lit : Assignment → Literal → Maybe Bool
+eval-lit a (Var x) with a ‼ x
+... | just true  = just true
+... | just false = just false
+... | nothing    = nothing
+
+eval-lit a (¬ x) with a ‼ x
+... | just true  = just false
+... | just false = just true
+... | nothing    = nothing
+
+
+-- Evaluate NNF formula
+
+eval-nnf : Assignment → NNF → Maybe Bool
+eval-nnf a (Lit l) = eval-lit a l
+
+eval-nnf a (f ∧ g) with eval-nnf a f | eval-nnf a g
+... | just b₁ | just b₂ = just (b₁ && b₂)
+... | _       | _       = nothing
+
+eval-nnf a (f ∨ g) with eval-nnf a f | eval-nnf a g
+... | just b₁ | just b₂ = just (b₁ || b₂)
+... | _       | _       = nothing
+
+
+-- test
+
+_ : eval-nnf myMap ((Lit (Var 0) ∧ Lit (¬ 1)) ∧ Lit (Var 0)) ≡ just true
+_ = refl
+
+_ : eval-nnf myMap (Lit (Var 0) ∧ Lit (Var 99)) ≡ nothing
+_ = refl
+
+
+
+-- 7. --
+-- Literal already defined
+
+data Disjunct : Set where
+  Lit : Literal → Disjunct
+  _∨_ : Literal → Disjunct → Disjunct
+
+data CNF : Set where
+  Disj : Disjunct → CNF
+  _∧_ : Disjunct → CNF → CNF
+
+
+-- 8. --
+
+-- Disjunction helper
+
+eval-disj : Assignment → Disjunct → Maybe Bool
+eval-disj a (Lit l)  = eval-lit a l
+
+eval-disj a (f ∨ g) with eval-lit a f | eval-disj a g
+... | just b₁ | just b₂ = just (b₁ || b₂)
+... | _       | _       = nothing
+
+
+-- Evaluate CNF formula
+
+eval-cnf : Assignment → CNF → Maybe Bool
+eval-cnf a (Disj f) = eval-disj a f
+
+eval-cnf a (f ∧ g) with eval-disj a f | eval-cnf a g
+... | just b₁ | just b₂ = just (b₁ && b₂)
+... | _       | _       = nothing
+
+
+-- test
+
+_ : eval-cnf myMap (((¬ 0) ∨ Lit (Var 1)) ∧ Disj (Lit (Var 2))) ≡ just false
+_ = refl
+
+_ : eval-cnf myMap (Disj (Var 99 ∨ Lit (Var 0))) ≡ nothing
+_ = refl
