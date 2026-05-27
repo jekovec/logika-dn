@@ -1,6 +1,6 @@
 module DN where
 
-open import Data.Nat using (ℕ; zero; suc)
+open import Data.Nat using (ℕ; zero; suc; _⊔_; _+_)
 open import Data.Bool using (Bool; true; false)
 open import Data.List using (List; []; _∷_)
 open import Data.Product using (_×_; _,_)
@@ -319,6 +319,7 @@ data Disjunct : Set where
 data CNF : Set where
   Disj : Disjunct → CNF
   _∧_ : Disjunct → CNF → CNF
+  Empty : CNF
 
 
 -- 8. --
@@ -336,6 +337,7 @@ eval-disj a (f ∨ g) with eval-lit a f | eval-disj a g
 -- Evaluate CNF formula
 
 eval-cnf : Assignment → CNF → Maybe Bool
+eval-cnf a Empty    = just true
 eval-cnf a (Disj f) = eval-disj a f
 
 eval-cnf a (f ∧ g) with eval-disj a f | eval-cnf a g
@@ -349,4 +351,95 @@ _ : eval-cnf myMap (((¬ 0) ∨ Lit (Var 1)) ∧ Disj (Lit (Var 2))) ≡ just fa
 _ = refl
 
 _ : eval-cnf myMap (Disj (Var 99 ∨ Lit (Var 0))) ≡ nothing
+_ = refl
+
+-- 11. (Tseytin) -- 
+
+--- Flip a literal's polarity. Needed to build Tseytin clauses. ---
+neg-lit : Literal → Literal
+neg-lit (Var n) = ¬ n
+neg-lit (¬ n) = Var n
+
+--- Append two CNFs, with Empty as identity. Needed to merge clause sets from recursive calls. --- 
+_cnf-∧_ : CNF → CNF → CNF
+Empty   cnf-∧ c  =  c
+c       cnf-∧ Empty  =  c
+Disj d  cnf-∧ c  =  d ∧ c
+(d ∧ c₁) cnf-∧ c₂  =  d ∧ (c₁ cnf-∧ c₂)
+
+--- Find the highest variable index in the formula so fresh variables can start above it. ---
+--- Used ⊔ which is the maximum operator for natural numbers ---
+max-var-nnf : NNF → ℕ
+max-var-nnf (Lit (Var n)) = n
+max-var-nnf (Lit (¬ n))   = n
+max-var-nnf (A ∧ B)       = max-var-nnf A ⊔ max-var-nnf B
+max-var-nnf (A ∨ B)       = max-var-nnf A ⊔ max-var-nnf B
+
+
+tseytin-step : NNF → ℕ → (CNF × Literal × ℕ)
+tseytin-step (Lit l) n = (Empty , l , n)
+tseytin-step (A ∨ B) n  = 
+  let (cA , repA , n1) = tseytin-step A n
+      (cB , repB , n2) = tseytin-step B n1
+      p = Var n2
+      np = neg-lit p
+      c1 = np ∨ (repA ∨ Lit repB) 
+      c2 = p ∨ Lit (neg-lit repA)
+      c3 = p  ∨ Lit (neg-lit repB)
+      newClauses = c1 ∧ (c2 ∧ Disj c3)
+  in ((cA cnf-∧ (cB cnf-∧ newClauses)) , p , suc n2)
+tseytin-step (A ∧ B) n =
+  let (cA , repA , n1) = tseytin-step A n
+      (cB , repB , n2) = tseytin-step B n1
+      p                = Var n2
+      np               = neg-lit p
+      c1               = np ∨ Lit repA
+      c2               = np ∨ Lit repB                        
+      c3               = p  ∨ (neg-lit repA ∨ Lit (neg-lit repB))
+      newClauses       = c1 ∧ (c2 ∧ Disj c3)
+  in ((cA cnf-∧ (cB cnf-∧ newClauses)) , p , suc n2)
+
+
+to-cnf : NNF → CNF
+to-cnf f =
+  let start          = suc (max-var-nnf f)
+      (clauses , rep , _) = tseytin-step f start
+  in  clauses cnf-∧ Disj (Lit rep)
+ 
+--- Tests for Tseyting ---
+-- Literal: no fresh vars introduced, just wraps in Disj
+_ : to-cnf (Lit (Var 0)) ≡ Disj (Lit (Var 0))
+_ = refl
+
+-- Conjunction: p2 ↔ (p0 ∧ p1), fresh var is 2
+_ : to-cnf (Lit (Var 0) ∧ Lit (Var 1))
+    ≡ ((¬ 2) ∨ Lit (Var 0)) ∧ (((¬ 2) ∨ Lit (Var 1)) ∧ ((Var 2 ∨ ((¬ 0) ∨ Lit (¬ 1))) ∧ Disj (Lit (Var 2))))
+_ = refl
+
+-- Disjunction: p2 ↔ (p0 ∨ p1), fresh var is 2
+_ : to-cnf (Lit (Var 0) ∨ Lit (Var 1))
+    ≡ ((¬ 2) ∨ (Var 0 ∨ Lit (Var 1))) ∧ ((Var 2 ∨ Lit (¬ 0)) ∧ ((Var 2 ∨ Lit (¬ 1)) ∧ Disj (Lit (Var 2))))
+_ = refl
+
+-- Semantic tests: eval-cnf on Tseytin output agrees with eval-nnf on original
+-- (requires a consistent assignment where fresh vars match their subformula values)
+
+-- {0→true, 1→true, 2→true}: consistent for ∧ since true∧true=true
+aConj-sat : Assignment
+aConj-sat = ((empty [ 0 ]≔ true) [ 1 ]≔ true) [ 2 ]≔ true
+
+-- {0→true, 1→false, 2→false}: consistent for ∧ since true∧false=false
+aConj-unsat : Assignment
+aConj-unsat = ((empty [ 0 ]≔ true) [ 1 ]≔ false) [ 2 ]≔ false
+
+-- conjunction: satisfiable case
+_ : eval-cnf aConj-sat (to-cnf (Lit (Var 0) ∧ Lit (Var 1))) ≡ eval-nnf aConj-sat (Lit (Var 0) ∧ Lit (Var 1))
+_ = refl
+
+-- conjunction: unsatisfied case
+_ : eval-cnf aConj-unsat (to-cnf (Lit (Var 0) ∧ Lit (Var 1))) ≡ eval-nnf aConj-unsat (Lit (Var 0) ∧ Lit (Var 1))
+_ = refl
+
+-- disjunction: myMap = {0→true, 1→false, 2→true}, consistent since true∨false=true
+_ : eval-cnf myMap (to-cnf (Lit (Var 0) ∨ Lit (Var 1))) ≡ eval-nnf myMap (Lit (Var 0) ∨ Lit (Var 1))
 _ = refl
