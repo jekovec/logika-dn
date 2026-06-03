@@ -2,7 +2,7 @@ module DN where
 
 open import Data.Nat using (ℕ; zero; suc; _⊔_; _+_)
 open import Data.Bool using (Bool; true; false)
-open import Data.List using (List; []; _∷_)
+open import Data.List using (List; []; _∷_; _++_)
 open import Data.Product using (_×_; _,_)
 open import Data.Maybe using (Maybe; just; nothing)
 open import Data.Empty using (⊥; ⊥-elim)
@@ -64,7 +64,6 @@ _ = refl
 -- ¬(p ∨ q) becomes ¬p ∧ ¬q
 _ : to-nnf (¬ (Var 0 ∨ Var 1)) ≡ Lit (¬ 0) ∧ Lit (¬ 1)
 _ = refl
-
 -- 4. --
 
 -- Decidability: for any proposition A, either we have a proof of A (yes),
@@ -265,10 +264,6 @@ eval a (f ∨ g) with eval a f | eval a g
 ... | _       | _       = nothing
 
 
--- test
-_ : eval myMap (Var 0 ∧ Var 1) ≡ just false
-_ = refl
-
 -- 6. --
 
 -- Lieteral helper
@@ -297,16 +292,6 @@ eval-nnf a (f ∧ g) with eval-nnf a f | eval-nnf a g
 eval-nnf a (f ∨ g) with eval-nnf a f | eval-nnf a g
 ... | just b₁ | just b₂ = just (b₁ || b₂)
 ... | _       | _       = nothing
-
-
--- test
-
-_ : eval-nnf myMap ((Lit (Var 0) ∧ Lit (¬ 1)) ∧ Lit (Var 0)) ≡ just true
-_ = refl
-
-_ : eval-nnf myMap (Lit (Var 0) ∧ Lit (Var 99)) ≡ nothing
-_ = refl
-
 
 
 -- 7. --
@@ -344,14 +329,182 @@ eval-cnf a (f ∧ g) with eval-disj a f | eval-cnf a g
 ... | just b₁ | just b₂ = just (b₁ && b₂)
 ... | _       | _       = nothing
 
+-- 9. --
 
--- test
+-- for dpll we need representation that can handle empty clauses
 
-_ : eval-cnf myMap (((¬ 0) ∨ Lit (Var 1)) ∧ Disj (Lit (Var 2))) ≡ just false
-_ = refl
+Clause : Set
+Clause = List Literal
 
-_ : eval-cnf myMap (Disj (Var 99 ∨ Lit (Var 0))) ≡ nothing
-_ = refl
+FormulaS : Set
+FormulaS = List Clause
+
+length : {A : Set} → List A → ℕ
+length []       = zero
+length (_ ∷ xs) = suc (length xs)
+
+_==ℕ_ : ℕ → ℕ → Bool
+m ==ℕ n with 𝒩 .test-≡ m n
+... | yes _ = true
+... | no  _ = false
+
+lit-var : Literal → ℕ
+lit-var (Var x) = x
+lit-var (¬ x)   = x
+
+lit-sign : Literal → Bool
+lit-sign (Var _) = true
+lit-sign (¬ _)   = false
+
+negate-lit : Literal → Literal
+negate-lit (Var x) = ¬ x
+negate-lit (¬ x)   = Var x
+
+-- convert cnf into rep for dpll
+
+disj→clause : Disjunct → Clause
+disj→clause (Lit l) = l ∷ []
+disj→clause (l ∨ d) = l ∷ disj→clause d
+
+cnf→formula : CNF → FormulaS
+cnf→formula (Disj d) = disj→clause d ∷ []
+cnf→formula (d ∧ f)  = disj→clause d ∷ cnf→formula f
+cnf→formula Empty = []
+
+-- literal membership
+
+lit-eq : Literal → Literal → Bool
+lit-eq (Var x) (Var y) = x ==ℕ y
+lit-eq (¬ x)   (¬ y)   = x ==ℕ y
+lit-eq _       _       = false
+
+contains-lit : Literal → Clause → Bool
+contains-lit l [] = false
+contains-lit l (x ∷ xs) with lit-eq l x
+... | true  = true
+... | false = contains-lit l xs
+
+-- removes a literal
+
+remove-lit : Literal → Clause → Clause
+remove-lit l [] = []
+remove-lit l (x ∷ xs) with lit-eq l x
+... | true  = remove-lit l xs
+... | false = x ∷ remove-lit l xs
+
+--   l = true:
+--   remove satisfied clauses
+--   remove ¬l from remaining clauses
+
+simplify : Literal → FormulaS → FormulaS
+simplify l [] = []
+
+simplify l (c ∷ cs) with contains-lit l c
+... | true = simplify l cs
+... | false = remove-lit (negate-lit l) c ∷ simplify l cs
+
+-- looks for empty clause
+
+has-empty-clause : FormulaS → Bool
+has-empty-clause [] = false
+has-empty-clause ([] ∷ _) = true
+has-empty-clause (_ ∷ fs) = has-empty-clause fs
+
+-- looks for unit clause
+
+find-unit-clause : FormulaS → Maybe Literal
+find-unit-clause [] = nothing
+find-unit-clause ((l ∷ []) ∷ fs) = just l
+find-unit-clause (_ ∷ fs) = find-unit-clause fs
+
+-- look for pure literals
+
+clause-lits : Clause → List Literal
+clause-lits c = c
+
+formula-lits : FormulaS → List Literal
+formula-lits [] = []
+formula-lits (c ∷ fs) = clause-lits c ++ formula-lits fs
+
+occurs : Literal → FormulaS → Bool
+occurs l [] = false
+occurs l (c ∷ fs) with contains-lit l c
+... | true  = true
+... | false = occurs l fs
+
+find-pure-from : List Literal → FormulaS → Maybe Literal
+find-pure-from [] f = nothing
+
+find-pure-from (l ∷ ls) f with occurs (negate-lit l) f
+... | true  = find-pure-from ls f
+... | false = just l
+
+find-pure : FormulaS → Maybe Literal
+find-pure f = find-pure-from (formula-lits f) f
+
+
+first-literal-clause : Clause → Maybe Literal
+first-literal-clause [] = nothing
+first-literal-clause (l ∷ _) = just l
+
+choose-literal : FormulaS → Maybe Literal
+choose-literal [] = nothing
+
+choose-literal (c ∷ fs) with first-literal-clause c
+... | just l  = just l
+... | nothing = choose-literal fs
+
+-- count literals so we show that algorithm stops
+
+count-lits : FormulaS → ℕ
+count-lits [] = zero
+count-lits (c ∷ fs) = length c + count-lits fs
+
+-- actual dpll
+
+dpll-iter : ℕ → FormulaS → Assignment → Maybe Assignment
+dpll-iter zero f a = nothing
+
+-- success = no clauses left
+dpll-iter (suc n) [] a = just a
+
+-- failure = contains empty clause
+dpll-iter (suc n) f a with has-empty-clause f
+... | true = nothing
+... | false with find-unit-clause f
+
+-- unit propagation
+... | just l = dpll-iter n (simplify l f) (a [ lit-var l ]≔ lit-sign l)
+... | nothing with find-pure f
+
+-- pure literal elimination
+... | just l = dpll-iter n (simplify l f) (a [ lit-var l ]≔ lit-sign l)
+... | nothing with choose-literal f
+... | nothing = just a
+
+-- branching
+... | just l with dpll-iter n (simplify l f) (a [ lit-var l ]≔ lit-sign l)
+... | just sol = just sol
+... | nothing = dpll-iter n (simplify (negate-lit l) f) (a [ lit-var (negate-lit l) ]≔ lit-sign (negate-lit l))
+
+
+
+-- solver for cnf
+
+solve-cnf : CNF → Maybe Assignment
+solve-cnf f = dpll-iter (count-lits (cnf→formula f)) (cnf→formula f) empty
+
+-- couple tests, can use ctrl c+n with solve-cnf test
+
+test1 : CNF
+test1 = Lit (Var 0) ∧ Disj (Lit (¬ 0))
+
+test2 : CNF
+test2 = (Var 0 ∨ Lit (Var 1)) ∧ Disj (Lit (Var 2))
+
+test3 : CNF
+test3 = (Var 0 ∨ Lit (Var 1)) ∧ (((¬ 0) ∨ Lit (Var 2)) ∧ Disj (Lit (¬ 2)))
+
 
 -- 11. (Tseytin) -- 
 
@@ -443,3 +596,21 @@ _ = refl
 -- disjunction: myMap = {0→true, 1→false, 2→true}, consistent since true∨false=true
 _ : eval-cnf myMap (to-cnf (Lit (Var 0) ∨ Lit (Var 1))) ≡ eval-nnf myMap (Lit (Var 0) ∨ Lit (Var 1))
 _ = refl
+
+
+-- 12. --
+
+data Input : Set where
+  formula : Formula → Input
+  nnf     : NNF → Input
+  cnf     : CNF → Input
+
+solve : Input → Maybe Assignment
+solve (formula f) = solve-cnf (to-cnf (to-nnf f))
+solve (nnf f) = solve-cnf (to-cnf f)
+solve (cnf f) = solve-cnf f
+
+
+-- solve (formula (f))
+-- solve (nnf (n))
+-- solve (cnf (c))
